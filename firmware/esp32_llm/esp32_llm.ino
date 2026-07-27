@@ -16,6 +16,7 @@
 // Leave 0 to run serial-only (no panel needed).
 #define USE_DISPLAY 1
 #if USE_DISPLAY
+#define DISPLAY_KIND DISPLAY_CORES3
 #include "display.h"
 #endif
 

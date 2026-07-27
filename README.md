@@ -1,88 +1,228 @@
-# Running a 28.9M parameter LLM on an $8 microcontroller
+# ESP32-AI — 28.9M 參數語言模型在 ESP32-S3 上運行
 
-<p align="center">
-  Open to Work &nbsp;·&nbsp;
-  <a href="https://x.com/slvDev">𝕏 slvDev</a> &nbsp;·&nbsp;
-  <a href="https://www.linkedin.com/in/slvdev/">LinkedIn</a>
-</p>
+[![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v6.0-blue)](https://github.com/espressif/esp-idf)
+[![Target](https://img.shields.io/badge/target-ESP32--S3-orange)](https://www.espressif.com/en/products/socs/esp32-s3)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-![28.9M-parameter LLM running on an ESP32-S3](media/esp32-ple-demo.gif)
+**🇹🇼 繁體中文** · [English](#english)
 
-This is a 28.9 million parameter language model that generates text on an ESP32-S3,
-a microcontroller that costs about $8. It runs on the chip itself, with nothing
-sent to a server, and it writes each word to a small screen wired to the chip at
-roughly 9 tokens per second. The last language model people ran on a chip like this had 260
-thousand parameters, so this one holds about a hundred times more. It fits because
-most of the model lives in flash instead of RAM, using an idea from Google's Gemma
-models called Per-Layer Embeddings.
+---
 
-## The numbers
+## 🇹🇼 繁體中文
 
-|              |                                                               |
-| ------------ | ------------------------------------------------------------- |
-| Parameters   | 28.9M stored (25M of them in a flash lookup table)            |
-| Chip         | ESP32-S3, about $8, with 512KB SRAM, 8MB PSRAM and 16MB flash |
-| Speed        | about 9.5 tok/s end to end (9.7 tok/s of pure compute)        |
-| Connectivity | none, everything runs on the device                           |
-| Model size   | 14.9MB at 4-bit                                               |
+### 概述
 
-## Why it is hard, and how it fits anyway
+這是一個 **28.9M 參數**的語言模型，能在 **ESP32-S3** 微控制器（約 $8）上**完全離線**運行。採用 Google Gemma 的 **Per-Layer Embeddings (PLE)** 技術，將 25M 參數的大表放進 Flash，每 token 僅讀取約 450 bytes，讓記憶體受限的 MCU 也能跑大型語言模型。
 
-A microcontroller has very little fast memory. The ESP32-S3 gives you 512KB of SRAM.
-Normally the whole model has to be reachable from there, which keeps you stuck with
-tiny models, and that is why the previous model on a chip like this had only 260
-thousand parameters.
+**核心數據：**
+| | |
+|---|---|
+| 參數量 | 28.9M（其中 25M 在 Flash 查找表） |
+| 晶片 | ESP32-S3，512KB SRAM + 8MB PSRAM + 16MB Flash |
+| 速度 | ~9.5 tok/s |
+| 模型大小 | 14.9MB（4-bit 量化） |
+| 訓練資料 | TinyStories |
 
-The way around it is to stop putting the model in fast memory at all. Most of a
-language model's parameters sit in an embedding table, which the model reads from
-rather than computes on. So you can leave that 25 million row table in slow flash
-and pull only the few rows each token needs, about 450 bytes, while the small part
-that does the actual work stays in fast memory. The large model then costs almost
-nothing to run, because you never load most of it. It just sits in flash and gets
-sampled a little at a time.
+### 本專案修改
 
-That idea is Google's Per-Layer Embeddings, from Gemma 3n and Gemma 4. Here it runs
-on the memory layout of a microcontroller instead of a phone or a GPU. As far as I
-can tell, nobody had tried it on a chip this small.
+在原專案 [slvDev/esp32-ai](https://github.com/slvDev/esp32-ai) 基礎上，新增 **M5Stack CoreS3** 支援：
+
+- ✅ 內建 **ILI9342C 彩色 LCD** 顯示（320x240，使用 M5GFX 驅動）
+- ✅ CoreS3 專用板子設定（QSPI PSRAM、USB CDC）
+- ✅ 已訓練模型權重（val ppl 13.9，5000 steps，batch=8）
+- ✅ 可直接燒錄使用
+
+### 硬體需求
+
+- **M5Stack CoreS3**（或其他 ESP32-S3 N16R8 開發板）
+- USB-C 連接線
+
+### 快速開始
+
+```bash
+# 1. 燒錄 Firmware
+arduino-cli upload \
+  -p /dev/ttyACM0 \
+  --fqbn 'esp32:esp32:m5stack_cores3:PSRAM=enabled,UploadSpeed=921600,PartitionScheme=custom,DebugLevel=info' \
+  --input-dir /tmp/esp32-llm-build-cores3 \
+  firmware/esp32_llm
+
+# 2. 燒錄模型到 Flash 分區
+pip install esptool
+esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
+  write_flash 0x110000 firmware/model/model.bin
+
+# 3. 監控序列輸出
+arduino-cli monitor -p /dev/ttyACM0 --config baudrate=115200
+```
+
+### 自行編譯
+
+```bash
+# Python 環境
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+
+# 下載資料集 + 訓練 tokenizer
+python data/prepare.py --vocab 32768
+
+# 訓練模型（可選，約 4 小時在 CPU / 更快在 GPU）
+python src/train.py --arm ple --vocab 32768 --d-model 96 --n-layers 6 \
+  --ple-dim 128 --target-core 560000 --batch-size 8 --seq-len 256 \
+  --steps 5000 --seed 0 --tag cleandeploy
+
+# 匯出模型二進位檔
+python src/export.py ple-cleandeploy-s0
+
+# 產生 vocab.h
+python src/gen_assets.py
+
+# 驗證 C 語言推論
+cc -O3 -o /tmp/esp32-llm-verify firmware/host_verify/verify.c -lm
+/tmp/esp32-llm-verify firmware/model/model.bin firmware/model/golden.txt
+
+# 編譯 Firmware（CoreS3）
+arduino-cli compile \
+  --fqbn 'esp32:esp32:m5stack_cores3:PSRAM=enabled,UploadSpeed=921600,PartitionScheme=custom,DebugLevel=info' \
+  --build-property compiler.optimization_flags=-O3 \
+  --build-path /tmp/esp32-llm-build-cores3 \
+  firmware/esp32_llm
+```
+
+### 專案結構
 
 ```
-  SRAM  (fast, tiny)   the "thinking" core, used on every token
-  PSRAM (medium)       the output head and working memory
-  FLASH (huge, slow)   the 25M-param table, about 6 rows read per token (~450 B)
+├── firmware/
+│   ├── esp32_llm/          # Arduino 韌體（CoreS3）
+│   │   ├── esp32_llm.ino   # 主程式
+│   │   ├── display.h       # 顯示驅動（OLED / TFT / CoreS3）
+│   │   ├── partitions.csv  # 分區表
+│   │   └── vocab.h         # 詞彙表（自動產生）
+│   ├── common/llm.h        # C 語言推論引擎
+│   ├── host_verify/        # Host 端驗證
+│   └── model/              # 模型二進位檔
+├── src/                    # Python 訓練與工具
+├── data/                   # 資料集與 tokenizer
+└── experiments/            # 實驗腳本
 ```
 
-## What it does, and what it does not
+### 鳴謝
 
-The model was trained on TinyStories, so it writes short, simple stories and mostly
-keeps them coherent. It will not answer questions, follow instructions, write code,
-or know facts. That limit comes from the small part of the model that does the
-reasoning, and the memory trick does not change it. What is interesting here is the
-architecture, fitting a large model onto a tiny chip, rather than what a 28.9 million
-parameter model can say.
+- 原始專案：[slvDev/esp32-ai](https://github.com/slvDev/esp32-ai) — 感謝 slvDev 的開創性工作
+- Per-Layer Embeddings 技術來自 Google Gemma
+- TinyStories 資料集來自 Microsoft Research
 
-## Running it yourself
+---
 
-The firmware, the wiring, and the flashing steps live in
-[`firmware/esp32_llm/README.md`](firmware/esp32_llm/README.md). The training,
-ablation, and quantization code is in `src/` and `experiments/`. The full method,
-the ablations, and the on-chip measurements are written up in
-[`RESULTS.md`](RESULTS.md).
+## <a id="english"></a>English
 
-## Credit
+### Overview
 
-TinyStories is the dataset this trains on: short synthetic stories simple enough
-that a small model can still learn to write coherently (Ronen Eldan and Yuanzhi Li,
-Microsoft Research, [arXiv:2305.07759](https://arxiv.org/abs/2305.07759)). The other
-half is Per-Layer Embeddings, Google's design from the Gemma models, which is what
-lets a big model fit on a small chip.
+This is a **28.9M parameter** language model that runs **fully offline** on an **ESP32-S3** microcontroller (~$8). It uses Google's **Per-Layer Embeddings (PLE)** technique to store 25M parameters in Flash, reading only ~450 bytes per token, making large language models feasible on memory-constrained MCUs.
 
-Andrej Karpathy's [llama2.c](https://github.com/karpathy/llama2.c) is why a lot of
-people, me included, believe you can train a tiny language model and run it in plain
-C at all. This grew out of that.
+**Key numbers:**
 
-## How this actually went
+| | |
+|---|---|
+| Parameters | 28.9M total (25M in Flash lookup table) |
+| Chip | ESP32-S3, 512KB SRAM + 8MB PSRAM + 16MB Flash |
+| Speed | ~9.5 tok/s |
+| Model size | 14.9MB (4-bit quantized) |
+| Training data | TinyStories |
 
-I left the messy history in the repo on purpose. That includes a bug I found in my
-own parameter accounting, which had inflated an early number, and the corrected
-result that followed once I fixed it. The commit history and `RESULTS.md` show where
-the numbers moved and why.
+### This Fork
+
+Based on [slvDev/esp32-ai](https://github.com/slvDev/esp32-ai), this fork adds **M5Stack CoreS3** support:
+
+- ✅ Built-in **ILI9342C color LCD** display (320x240 via M5GFX driver)
+- ✅ CoreS3 board configuration (QSPI PSRAM, USB CDC)
+- ✅ Pre-trained model weights (val ppl 13.9, 5000 steps, batch=8)
+- ✅ Ready to flash and run
+
+### Hardware Required
+
+- **M5Stack CoreS3** (or any ESP32-S3 N16R8 board)
+- USB-C cable
+
+### Quick Start
+
+```bash
+# 1. Flash firmware
+arduino-cli upload \
+  -p /dev/ttyACM0 \
+  --fqbn 'esp32:esp32:m5stack_cores3:PSRAM=enabled,UploadSpeed=921600,PartitionScheme=custom,DebugLevel=info' \
+  --input-dir /tmp/esp32-llm-build-cores3 \
+  firmware/esp32_llm
+
+# 2. Flash model to partition
+pip install esptool
+esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
+  write_flash 0x110000 firmware/model/model.bin
+
+# 3. Monitor serial output
+arduino-cli monitor -p /dev/ttyACM0 --config baudrate=115200
+```
+
+### Building from Source
+
+```bash
+# Python environment
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+
+# Download dataset + train tokenizer
+python data/prepare.py --vocab 32768
+
+# Train model (optional, ~4 hours on CPU / faster on GPU)
+python src/train.py --arm ple --vocab 32768 --d-model 96 --n-layers 6 \
+  --ple-dim 128 --target-core 560000 --batch-size 8 --seq-len 256 \
+  --steps 5000 --seed 0 --tag cleandeploy
+
+# Export model binary
+python src/export.py ple-cleandeploy-s0
+
+# Generate vocab.h
+python src/gen_assets.py
+
+# Verify C inference
+cc -O3 -o /tmp/esp32-llm-verify firmware/host_verify/verify.c -lm
+/tmp/esp32-llm-verify firmware/model/model.bin firmware/model/golden.txt
+
+# Compile firmware (CoreS3)
+arduino-cli compile \
+  --fqbn 'esp32:esp32:m5stack_cores3:PSRAM=enabled,UploadSpeed=921600,PartitionScheme=custom,DebugLevel=info' \
+  --build-property compiler.optimization_flags=-O3 \
+  --build-path /tmp/esp32-llm-build-cores3 \
+  firmware/esp32_llm
+```
+
+### Project Structure
+
+```
+├── firmware/
+│   ├── esp32_llm/          # Arduino firmware (CoreS3)
+│   │   ├── esp32_llm.ino   # Main sketch
+│   │   ├── display.h       # Display drivers (OLED / TFT / CoreS3)
+│   │   ├── partitions.csv  # Flash partition table
+│   │   └── vocab.h         # Vocabulary (generated)
+│   ├── common/llm.h        # C inference engine
+│   ├── host_verify/        # Host verification tools
+│   └── model/              # Model binary
+├── src/                    # Python training & tools
+├── data/                   # Dataset & tokenizer
+└── experiments/            # Experiment scripts
+```
+
+### Credits
+
+- Original project: [slvDev/esp32-ai](https://github.com/slvDev/esp32-ai) — thanks to slvDev for the pioneering work
+- Per-Layer Embeddings from Google Gemma
+- TinyStories dataset from Microsoft Research
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE)

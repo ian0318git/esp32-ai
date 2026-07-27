@@ -3,19 +3,20 @@ __pycache__/
 .venv/
 *.pyc
 
-# data + tokenizers (regenerate with data/prepare.py)
+# data (regenerate with data/prepare.py) — keep tokenizer json
 data/*.bin
 data/*.txt
-data/*.json
+data/tinystories_slice.txt
 
-# training outputs
+# training checkpoints (large, 111MB — too big for git)
 runs/
 
-# generated firmware artifacts (regenerate with src/export.py, src/gen_assets.py)
-firmware/model/model.bin
-firmware/model/golden.npz
-firmware/model/golden.txt
-firmware/esp32_llm/vocab.h
+# compiled build artifacts
+firmware/esp32_llm/build/
+
+# python egg info
+src/*.egg-info/
+*.egg-info/
 
 # raw video / recordings (demo footage — keep out of the repo)
 video/

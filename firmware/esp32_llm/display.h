@@ -15,6 +15,7 @@
 
 #define DISPLAY_OLED_I2C 1
 #define DISPLAY_TFT_SPI  2
+#define DISPLAY_CORES3   3
 #ifndef DISPLAY_KIND
 #define DISPLAY_KIND DISPLAY_OLED_I2C
 #endif
@@ -109,7 +110,7 @@ static void display_stats(float tok_s, float ms) {
 }
 
 // ======================= 2.0" SPI TFT (ST7789) ==============================
-#else
+#elif DISPLAY_KIND == DISPLAY_TFT_SPI
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
 #include <SPI.h>
@@ -175,6 +176,65 @@ static void display_stats(float tok_s, float ms) {
   tft.setCursor(4, 170); tft.print(tok_s, 1); tft.print(" t/s");
   tft.setTextSize(2);
   tft.setCursor(4, 220); tft.print(ms, 0); tft.print(" ms/token");
+}
+
+// ==================== M5Stack CoreS3 (ILI9342C 320x240) ======================
+#elif DISPLAY_KIND == DISPLAY_CORES3
+#include <M5GFX.h>
+
+static M5GFX lcd;
+static int cursor_x = 0, cursor_y = 0;
+#define SCR_W 320
+#define SCR_H 240
+#define CHAR_W 12    // 6x8 Font0 at textsize 2
+#define CHAR_H 16
+#define LINE_H (CHAR_H + 2)
+
+static void display_home() {
+  lcd.fillScreen(TFT_BLACK);
+  cursor_x = 0;
+  cursor_y = 0;
+}
+
+static void display_begin() {
+  lcd.begin();
+  lcd.setRotation(1);  // landscape: 320 wide x 240 tall
+  lcd.fillScreen(TFT_BLACK);
+  lcd.setTextSize(2);
+  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  lcd.setTextWrap(false);
+  cursor_x = 0; cursor_y = 0;
+}
+
+static void display_puts(const unsigned char *s, int len) {
+  lcd.setCursor(cursor_x, cursor_y);
+  for (int i = 0; i < len; i++) {
+    char c = (char)s[i];
+    if (c == '\n') {
+      cursor_x = 0; cursor_y += LINE_H;
+    } else if (c >= 32 && c < 127) {
+      if (cursor_x + CHAR_W > SCR_W) { cursor_x = 0; cursor_y += LINE_H; }
+      if (cursor_y + LINE_H > SCR_H) display_home();
+      lcd.drawChar(c, cursor_x, cursor_y);
+      cursor_x += CHAR_W;
+    }
+    if (cursor_y + LINE_H > SCR_H) display_home();
+    lcd.setCursor(cursor_x, cursor_y);
+  }
+  lcd.display();
+}
+
+static void display_stats(float tok_s, float ms) {
+  lcd.fillScreen(TFT_BLACK);
+  lcd.setTextSize(2);
+  lcd.setCursor(4, 10);  lcd.printf("ESP32-S3 PLE LLM");
+  lcd.setCursor(4, 40);  lcd.printf("28.9M params");
+  lcd.setCursor(4, 70);  lcd.printf("in 320KB RAM");
+  lcd.setTextSize(3);
+  lcd.setCursor(4, 120); lcd.printf("%.1f tok/s", tok_s);
+  lcd.setTextSize(2);
+  lcd.setCursor(4, 180); lcd.printf("%.0f ms/tok", ms);
+  lcd.display();
 }
 
 #endif
