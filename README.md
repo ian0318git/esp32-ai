@@ -30,6 +30,7 @@
 - ✅ 內建 **ILI9342C 彩色 LCD** 顯示（320x240，使用 M5GFX 驅動）
 - ✅ CoreS3 專用板子設定（QSPI PSRAM、USB CDC）
 - ✅ 已訓練模型權重（val ppl 13.9，5000 steps，batch=8）
+- ✅ **全程 CPU 訓練**（約 4 小時，無 GPU 亦可完成）
 - ✅ 可直接燒錄使用
 
 ### 硬體需求
@@ -138,6 +139,7 @@ Based on [slvDev/esp32-ai](https://github.com/slvDev/esp32-ai), this fork adds *
 - ✅ Built-in **ILI9342C color LCD** display (320x240 via M5GFX driver)
 - ✅ CoreS3 board configuration (QSPI PSRAM, USB CDC)
 - ✅ Pre-trained model weights (val ppl 13.9, 5000 steps, batch=8)
+- ✅ **Trained entirely on CPU** (~4 hours, no GPU required)
 - ✅ Ready to flash and run
 
 ### Hardware Required
