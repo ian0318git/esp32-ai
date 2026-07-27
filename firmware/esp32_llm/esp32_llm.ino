@@ -20,8 +20,22 @@
 #include "display.h"
 #endif
 
-static const int PROMPT_IDS[] = {433, 447, 259, 405}; // "Once upon a time"
 static const int N_GENERATE = 200;
+
+// ---- pre-encoded prompts for interactive menu ----------------------------
+static const struct { const char *text; int len; const int *ids; } PROMPTS[] = {
+  { "Once upon a time",          4, (int[]){433, 447, 259, 405} },
+  { "There was a little",        4, (int[]){2614, 282, 259, 403} },
+  { "A long time ago",           4, (int[]){33, 796, 405, 5725} },
+  { "In a faraway land",         4, (int[]){2322, 259, 5961, 1675} },
+  { "Timmy was a",               3, (int[]){1318, 282, 259} },
+  { "The best day of",           4, (int[]){382, 833, 358, 348} },
+  { "A wise old owl",            4, (int[]){33, 1968, 704, 1920} },
+  { "Deep in the forest",        4, (int[]){17117, 317, 263, 1078} },
+  { "Lily and her dog",          4, (int[]){342, 265, 309, 635} },
+  { "Once there lived a",        4, (int[]){433, 406, 907, 259} },
+};
+#define N_PROMPTS (sizeof(PROMPTS) / sizeof(PROMPTS[0]))
 
 // Emit one token to every active output (serial always; TFT when enabled).
 static void emit(int tok) {
@@ -178,25 +192,64 @@ void setup() {
   Serial.printf("PSRAM free after alloc: %u KB\n\n",
                 heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
 
-  // ---- generate ----
-  Serial.print(">>> ");
-  int n_prompt = sizeof(PROMPT_IDS) / sizeof(int);
-  int pos = 0, tok = 0;
-  int64_t t_start = 0;
-  int64_t decode_us = 0;
-  int decoded = 0;
+  // ---- show interactive menu ----
+  interactive_menu();
+}
 
-  for (int i = 0; i < n_prompt; i++) {  // prime with the prompt
-    tok = PROMPT_IDS[i];
+// ---- interactive serial menu ---------------------------------------------
+static void flush_input() {
+  while (Serial.read() >= 0) delay(1);
+}
+
+// Read a line of comma/space-separated token IDs from serial into ids[].
+// Returns the number of ids read, or -1 on error.
+static int read_token_ids(int *ids, int max_ids) {
+  char buf[512];
+  int pos = 0;
+  // Read until newline or timeout
+  unsigned long start = millis();
+  while (millis() - start < 10000) {
+    if (Serial.available()) {
+      char c = Serial.read();
+      if (c == '\n' || c == '\r') break;
+      if (pos < (int)sizeof(buf) - 1) buf[pos++] = c;
+    }
+  }
+  buf[pos] = 0;
+  if (pos == 0) return 0;
+
+  // Parse numbers
+  int n = 0;
+  char *p = buf;
+  while (*p && n < max_ids) {
+    while (*p == ' ' || *p == ',' || *p == '\t') p++;
+    if (!*p) break;
+    char *end;
+    long v = strtol(p, &end, 10);
+    if (end == p) break;
+    if (v >= 0 && v < VOCAB_N) ids[n++] = (int)v;
+    p = end;
+  }
+  return n;
+}
+
+static void generate(const int *prompt_ids, int n_prompt) {
+  int pos = 0, tok = 0;
+  llm_profile_reset(&s);
+
+  // Prime with prompt
+  Serial.print(">>> ");
+  for (int i = 0; i < n_prompt; i++) {
+    tok = prompt_ids[i];
     emit(tok);
     llm_forward(&model, tok, pos++, &s);
   }
 
-  llm_profile_reset(&s);
-
-  t_start = esp_timer_get_time();
+  // Generate
+  int64_t t_start = esp_timer_get_time();
+  int64_t decode_us = 0;
+  int decoded = 0;
   for (int step = 0; step < N_GENERATE && pos < model.c.seq_len; step++) {
-    // greedy: argmax over the trained vocab
     int best = 0; float bv = -1e30f;
     for (int v = 0; v < VOCAB_N; v++)
       if (s.logits[v] > bv) { bv = s.logits[v]; best = v; }
@@ -208,7 +261,7 @@ void setup() {
     llm_forward(&model, tok, pos++, &s);
     decode_us += esp_timer_get_time() - d0;
     decoded++;
-    if ((step & 7) == 0) delay(0);  // feed the task WDT ~every 8 tokens (~1.1s), near-free
+    if ((step & 7) == 0) delay(0);
   }
   int64_t total_us = esp_timer_get_time() - t_start;
 
@@ -223,10 +276,55 @@ void setup() {
                   s.profile.head_us / n);
   }
 #if USE_DISPLAY
-  // Closing card: compute-only tok/s (the model's own speed) + ms/token.
   display_stats(decoded * 1e6f / decode_us, decode_us / 1000.0f / decoded);
 #endif
   blink(0);
 }
 
-void loop() { delay(10000); }
+static void interactive_menu() {
+  for (;;) {
+    // Print menu
+    Serial.println("\n===== PLE TinyLM =====");
+    Serial.println("Select a prompt (0-9) or:");
+    for (int i = 0; i < (int)N_PROMPTS; i++) {
+      Serial.printf("  %d: %s\n", i, PROMPTS[i].text);
+    }
+    Serial.println("  c: Enter custom token IDs");
+    Serial.println("  r: Re-run last prompt");
+    Serial.print("> ");
+
+    // Wait for input
+    while (!Serial.available()) delay(50);
+    char cmd = Serial.read();
+
+    if (cmd >= '0' && cmd <= '9') {
+      int idx = cmd - '0';
+      if (idx < (int)N_PROMPTS) {
+        flush_input();
+        Serial.println();
+        generate(PROMPTS[idx].ids, PROMPTS[idx].len);
+      }
+    } else if (cmd == 'c' || cmd == 'C') {
+      flush_input();
+      Serial.println("\nEnter token IDs (space/comma separated, end with newline):");
+      Serial.println("Tip: use Python to tokenize text:");
+      Serial.println("  >>> from tokenizers import Tokenizer");
+      Serial.println("  >>> tok = Tokenizer.from_file('data/bpe32768.json')");
+      Serial.println("  >>> tok.encode('your text').ids");
+      Serial.print("> ");
+      int custom_ids[256];
+      int n = read_token_ids(custom_ids, 256);
+      if (n > 0) {
+        Serial.println();
+        generate(custom_ids, n);
+      } else {
+        Serial.println("(no valid IDs)");
+      }
+    } else if (cmd == 'r' || cmd == 'R') {
+      ; // will re-prompt (loop re-runs default)
+    }
+    delay(100);
+  }
+}
+
+void loop() {}
