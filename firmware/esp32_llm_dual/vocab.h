@@ -1,0 +1,1 @@
+../esp32_llm/vocab.h
