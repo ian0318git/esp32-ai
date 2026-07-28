@@ -93,6 +93,9 @@ static const char *lang_prompt_custom() {
 static const char *lang_choose() {
   return lang == LANG_EN ? "  l: Switch language" : "  l: 切换语言";
 }
+static const char *lang_temp() {
+  return lang == LANG_EN ? "  t: Randomness" : "  t: 随机度";
+}
 
 // ---- helpers --------------------------------------------------------------
 static void emit(int tok) {
@@ -180,6 +183,35 @@ static void blink(uint8_t g) {
 #endif
 }
 
+// ---- temperature sampling -------------------------------------------------
+static float temperature = 0.8f;
+
+static int sample(float *logits, int n) {
+  if (temperature < 0.01f) {
+    // Greedy (temp≈0)
+    int best = 0; float bv = -1e30f;
+    for (int v = 0; v < n; v++)
+      if (logits[v] > bv) { bv = logits[v]; best = v; }
+    return best;
+  }
+  // Numerical stability: subtract max
+  float max_l = -1e30f;
+  for (int v = 0; v < n; v++) if (logits[v] > max_l) max_l = logits[v];
+  // Pass 1: total probability
+  float total = 0;
+  for (int v = 0; v < n; v++)
+    total += expf((logits[v] - max_l) / temperature);
+  // Random pick
+  float r = (float)esp_random() / (float)UINT32_MAX * total;
+  // Pass 2: accumulate
+  float cum = 0;
+  for (int v = 0; v < n; v++) {
+    cum += expf((logits[v] - max_l) / temperature);
+    if (cum >= r) return v;
+  }
+  return n - 1;
+}
+
 // ---- generate -------------------------------------------------------------
 static void generate(const int *prompt_ids, int n_prompt) {
   int pos = 0, tok = 0;
@@ -196,10 +228,7 @@ static void generate(const int *prompt_ids, int n_prompt) {
   int64_t decode_us = 0;
   int decoded = 0;
   for (int step = 0; step < N_GENERATE && pos < model.c.seq_len; step++) {
-    int best = 0; float bv = -1e30f;
-    for (int v = 0; v < vn; v++)
-      if (s.logits[v] > bv) { bv = s.logits[v]; best = v; }
-    tok = best;
+    tok = sample(s.logits, vn);
     emit(tok);
     blink((step & 1) ? 40 : 8);
 
@@ -211,7 +240,7 @@ static void generate(const int *prompt_ids, int n_prompt) {
   }
   int64_t total_us = esp_timer_get_time() - t_start;
 
-  Serial.printf("\n\n--- %d tokens in %.2f s ---\n", decoded, total_us / 1e6);
+  Serial.printf("\n\n--- %d tokens in %.2f s  (temp=%.1f) ---\n", decoded, total_us / 1e6, temperature);
   Serial.printf("throughput: %.2f tok/s   (%.1f ms/token)\n",
                 decoded * 1e6 / total_us, decode_us / 1000.0 / decoded);
   if (s.profile.calls) {
@@ -263,8 +292,9 @@ static void interactive_menu() {
     for (int i = 0; i < N_PROMPTS; i++)
       Serial.printf("  %d: %s\n", i, prompts[i].text);
     Serial.println(lang_prompt_cust());
+    Serial.println(lang_temp());
     Serial.println(lang_choose());
-    Serial.print("> ");
+    Serial.printf(lang == LANG_EN ? "  temp=%.1f > " : "  随机度=%.1f > ", temperature);
 
     while (!Serial.available()) delay(50);
     char cmd = Serial.read();
@@ -295,6 +325,13 @@ static void interactive_menu() {
         select_lang(LANG_EN);
         Serial.println("Language: English");
       }
+    } else if (cmd == 't' || cmd == 'T') {
+      float temps[] = {0.1f, 0.5f, 0.8f, 1.0f, 1.2f, 1.5f};
+      static int ti = 2; // start at 0.8
+      ti = (ti + 1) % (sizeof(temps) / sizeof(temps[0]));
+      temperature = temps[ti];
+      Serial.println();
+      Serial.printf(lang == LANG_EN ? "Temperature: %.1f\n" : "随机度: %.1f\n", temperature);
     }
     delay(100);
   }
