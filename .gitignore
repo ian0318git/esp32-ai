@@ -25,3 +25,4 @@ videos/
 *.mov
 *.MOV
 *.MP4
+firmware/*/build/

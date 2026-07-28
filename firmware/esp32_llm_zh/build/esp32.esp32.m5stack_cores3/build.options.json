@@ -1,9 +1,0 @@
-{
-  "additionalFiles": "../..",
-  "compiler.optimization_flags": "-O3",
-  "customBuildProperties": "compiler.optimization_flags=-O3",
-  "fqbn": "esp32:esp32:m5stack_cores3:PSRAM=enabled,UploadSpeed=921600,PartitionScheme=custom,DebugLevel=info",
-  "hardwareFolders": "/home/ian/.arduino15/packages/esp32/hardware/esp32/3.3.10,/home/ian/.arduino15/packages/esp32/hardware/esp32/3.3.10",
-  "otherLibrariesFolders": "/home/ian/Arduino/libraries",
-  "sketchLocation": "/home/ian/github-project/esp32-ai/firmware/esp32_llm_zh"
-}
