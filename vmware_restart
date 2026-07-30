@@ -1,0 +1,104 @@
+# ESP32-AI — 重新啟動後參考
+# 重啟後執行 source venv 就能繼續使用
+
+## 1. 進入專案 + venv
+
+```bash
+cd ~/github-project/esp32-ai
+source .venv/bin/activate
+```
+
+## 2. 檢查 CoreS3 是否連上
+
+```bash
+ls /dev/ttyACM0
+# 如果沒有，檢查 USB 線或試 dmesg | grep tty
+```
+
+## 3. 檢查已燒錄的版本
+
+開監控看 menu：
+```bash
+arduino-cli monitor -p /dev/ttyACM0 --config baudrate=115200
+```
+
+## 4. 常用指令一覽
+
+### 監控
+```bash
+arduino-cli monitor -p /dev/ttyACM0 --config baudrate=115200
+```
+
+### 燒錄雙語 firmware（如果 /tmp 被清掉，需重新編譯）
+```bash
+arduino-cli compile \
+  --fqbn 'esp32:esp32:m5stack_cores3:PSRAM=enabled,UploadSpeed=921600,PartitionScheme=custom,DebugLevel=info' \
+  --build-property compiler.optimization_flags=-O3 \
+  --build-path /tmp/esp32-llm-dual-build \
+  firmware/esp32_llm_dual
+
+arduino-cli upload -p /dev/ttyACM0 \
+  --fqbn 'esp32:esp32:m5stack_cores3:PSRAM=enabled,UploadSpeed=921600,PartitionScheme=custom,DebugLevel=info' \
+  --input-dir /tmp/esp32-llm-dual-build \
+  firmware/esp32_llm_dual
+```
+
+### 切換語言（只需重燒 model，30 秒）
+```bash
+# 英文
+esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
+  write-flash 0x1A0000 firmware/model/model.bin
+
+# 中文
+esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
+  write-flash 0x1A0000 firmware/model_zh/model_zh.bin
+```
+
+### 互動 prompt（需 venv）
+```bash
+python src/interact.py --lang en   # 英文
+python src/interact.py --lang zh   # 中文
+```
+
+### 清除 Flash + 全部重燒
+```bash
+esptool --chip esp32s3 --port /dev/ttyACM0 erase-flash
+# 然後依序燒 firmware → model
+```
+
+### 重新訓練模型
+```bash
+# 英文（~4 小時）
+python src/train.py --arm ple --vocab 32768 --d-model 96 --n-layers 6 \
+  --ple-dim 128 --target-core 560000 --batch-size 8 --seq-len 256 \
+  --steps 5000 --seed 0 --tag cleandeploy
+
+# 中文（~4 小時）
+python src/train.py --arm ple --vocab 32768 --d-model 96 --n-layers 6 \
+  --ple-dim 128 --target-core 560000 --batch-size 8 --seq-len 256 \
+  --steps 5000 --seed 0 --tag zh
+```
+
+## 5. 專案目錄結構
+
+```
+~/github-project/esp32-ai/
+├── .venv/                    # Python venv（重啟後 source 啟用）
+├── firmware/
+│   ├── esp32_llm/           # 英文版 firmware
+│   ├── esp32_llm_zh/        # 中文版 firmware（獨立）
+│   ├── esp32_llm_dual/      # 雙語 firmware（推薦）
+│   ├── model/               # 英文 model.bin
+│   ├── model_zh/            # 中文 model_zh.bin
+│   └── zh/vocab_zh.h        # 中文詞彙表
+├── src/                     # Python 工具
+│   ├── train.py, export.py  # 訓練與匯出
+│   ├── gen_assets.py        # 產生 vocab.h
+│   └── interact.py          # 互動 prompt
+├── data/                    # tokenizer + 資料集
+└── runs/                    # 模型檢查點（.pt）
+```
+
+## 6. 版本
+
+目前最新：v2.3 — 雙語 firmware + 中文字型 + 隨機取樣
